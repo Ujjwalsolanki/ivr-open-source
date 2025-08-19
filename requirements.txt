@@ -1,0 +1,24 @@
+# STT Module dependencies
+faster-whisper
+numpy
+soundfile
+scipy
+
+# Core dependencies
+torch
+accelerate
+transformers
+sentence-transformers
+bitsandbytes # For quantized models if we decide to use them later
+
+# TTS Module dependencies
+coqui-tts
+sounddevice
+
+# UI dependencies
+fastapi
+uvicorn[standard]
+
+# Additional utilities
+python-multipart
+setuptools==66.1.1
