@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chatbot</title>
+    <!-- Use Inter font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS CDN for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a1a2e;
+            color: #e0e0e0;
+        }
+        .chat-container {
+            height: calc(100vh - 8rem);
+            overflow-y: auto;
+            scroll-behavior: smooth;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen">
+    <div class="w-full max-w-4xl h-screen flex flex-col p-4 bg-[#23233c] rounded-xl shadow-2xl">
+        
+        <!-- Header -->
+        <header class="flex items-center justify-between p-4 border-b border-gray-700">
+            <h1 class="text-2xl font-bold text-[#b4b4e8]">AI Chatbot</h1>
+            <div class="text-sm text-gray-400">Status: <span id="status-indicator" class="text-red-400">Offline</span></div>
+        </header>
+
+        <!-- Chat History -->
+        <main id="chat-history" class="chat-container flex-grow overflow-y-auto p-4 space-y-4">
+            <!-- Placeholder for chat messages -->
+            <div class="flex items-start">
+                <div class="bg-gray-800 text-white p-3 rounded-lg max-w-sm">
+                    Hello! I'm ready to assist you.
+                </div>
+            </div>
+            <!-- More messages will be appended here via JavaScript -->
+        </main>
+        
+        <!-- Input area -->
+        <div class="p-4 border-t border-gray-700 flex items-center space-x-3">
+            <div class="relative flex-grow">
+                <textarea 
+                    id="user-input" 
+                    class="w-full p-3 pr-12 text-gray-100 bg-gray-700 border border-gray-600 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-[#8e8ee8] disabled:opacity-50" 
+                    placeholder="Input is disabled. Press the microphone button to speak..." 
+                    rows="1"
+                    disabled
+                ></textarea>
+            </div>
+            
+            <!-- Voice button -->
+            <button id="voice-button" class="bg-[#8e8ee8] p-3 rounded-full shadow-lg hover:bg-[#6f6fb8] transition-all duration-200 ease-in-out transform hover:scale-105 active:scale-95 disabled:bg-gray-500">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6 text-white">
+                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                    <line x1="12" x2="12" y1="19" y2="22"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Combined JavaScript for a self-contained solution -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const voiceButton = document.getElementById('voice-button');
+            const userInput = document.getElementById('user-input');
+            const statusIndicator = document.getElementById('status-indicator');
+            const chatHistory = document.getElementById('chat-history');
+
+            let isListening = false;
+            let mediaRecorder;
+            let audioChunks = [];
+            // In-memory chat history to be sent to the LLM for context
+            let conversationHistory = [];
+
+            // A single function to set up the MediaRecorder
+            async function setupRecorder() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(stream);
+                    
+                    mediaRecorder.ondataavailable = event => {
+                        audioChunks.push(event.data);
+                    };
+
+                    mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        audioChunks = [];
+                        processAudioAndGetResponses(audioBlob);
+                    };
+                    console.log('MediaRecorder setup complete.');
+                } catch (error) {
+                    console.error('Microphone access denied or not available:', error);
+                    console.warn('Microphone access is required to use voice input.');
+                    isListening = false;
+                    voiceButton.classList.remove('bg-red-500', 'animate-pulse');
+                    voiceButton.classList.add('bg-[#8e8ee8]');
+                    statusIndicator.textContent = "Offline";
+                    statusIndicator.classList.remove('text-green-400');
+                    statusIndicator.classList.add('text-red-400');
+                }
+            }
+
+            // Function to handle the server's response in two steps
+            async function processAudioAndGetResponses(audioBlob) {
+                console.log('Sending audio for transcription...');
+                statusIndicator.textContent = "Transcribing...";
+                statusIndicator.classList.remove('text-green-400');
+                statusIndicator.classList.add('text-yellow-400');
+
+                const formData = new FormData();
+                formData.append('audio', audioBlob, 'audio.webm');
+
+                try {
+                    // --- Step 1: Get Transcription ---
+                    const sttResponse = await fetch('/stt', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!sttResponse.ok) {
+                        throw new Error(`HTTP error! status: ${sttResponse.status}`);
+                    }
+
+                    const sttResult = await sttResponse.json();
+                    const transcription = sttResult.transcription || 'No speech detected.';
+                    console.log('Transcription received:', transcription);
+                    
+                    // Append the user's message to the UI
+                    appendMessage(transcription, 'user');
+
+                    // --- Step 2: Get LLM and TTS response ---
+                    console.log('Sending transcription for LLM and TTS...');
+                    statusIndicator.textContent = "Generating response...";
+                    
+                    const llmResponse = await fetch('/llm_and_tts', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        // body: JSON.stringify({ text: transcription, chat_history: conversationHistory })
+                    });
+
+                    if (!llmResponse.ok) {
+                        throw new Error(`HTTP error! status: ${llmResponse.status}`);
+                    }
+
+                    const llmResult = await llmResponse.json();
+                    const assistantResponseText = llmResult.llm_response || 'An error occurred with the LLM.';
+                    const assistantAudio = llmResult.audio_data;
+                    
+                    console.log('Assistant response received:', assistantResponseText);
+                    
+                    // Append the assistant's message to the UI
+                    appendMessage(assistantResponseText, 'assistant');
+                    
+                    if (assistantAudio) {
+                        playBase64Audio(assistantAudio, 'audio/wav', 1.5);
+                    } else {
+                        console.error('No audio data received from server.');
+                    }
+
+                } catch (error) {
+                    console.error('Error in processing:', error);
+                } finally {
+                    statusIndicator.textContent = "Offline";
+                    statusIndicator.classList.remove('text-yellow-400');
+                    statusIndicator.classList.add('text-red-400');
+                }
+            }
+
+            // Helper function to display messages in the UI
+            function appendMessage(text, sender) {
+                const messageDiv = document.createElement('div');
+                messageDiv.classList.add('flex', 'items-start', 'mb-2');
+
+                const messageBubble = document.createElement('div');
+                messageBubble.textContent = text;
+                messageBubble.classList.add('p-3', 'rounded-lg', 'max-w-sm');
+
+                if (sender === 'user') {
+                    messageDiv.classList.add('justify-end');
+                    messageBubble.classList.add('bg-[#b4b4e8]', 'text-[#23233c]');
+                    conversationHistory.push({ role: 'user', text: text });
+                } else {
+                    messageDiv.classList.add('justify-start');
+                    messageBubble.classList.add('bg-gray-800', 'text-white');
+                    conversationHistory.push({ role: 'assistant', text: text });
+                }
+
+                messageDiv.appendChild(messageBubble);
+                chatHistory.appendChild(messageDiv);
+                chatHistory.scrollTop = chatHistory.scrollHeight;
+            }
+
+            // Function to play audio from the server response
+            function playBase64Audio(base64AudioData, mimeType, playbackRate = 1.0) {
+                if (!base64AudioData || !mimeType) {
+                    console.error("No audio data or MIME type provided.");
+                    return;
+                }
+            
+                try {
+                    const audioUrl = `data:${mimeType};base64,${base64AudioData}`;
+                    const audio = new Audio(audioUrl);
+                    audio.playbackRate = playbackRate;
+                    audio.play().catch(error => {
+                        console.error("Error playing audio:", error);
+                    });
+                } catch (error) {
+                    console.error("Failed to create and play audio from base64 data:", error);
+                }
+            }
+
+            // Call the setup function when the page loads
+            setupRecorder();
+
+            voiceButton.addEventListener('click', () => {
+                if (!mediaRecorder) {
+                    alert('MediaRecorder is not initialized. Please refresh the page and allow microphone access.');
+                    return;
+                }
+
+                isListening = !isListening;
+                
+                if (isListening) {
+                    mediaRecorder.start();
+                    voiceButton.classList.remove('bg-[#8e8ee8]');
+                    voiceButton.classList.add('bg-red-500', 'animate-pulse');
+                    userInput.disabled = true;
+                    userInput.placeholder = "Listening...";
+                    statusIndicator.textContent = "Listening";
+                    statusIndicator.classList.remove('text-red-400');
+                    statusIndicator.classList.add('text-green-400');
+                    console.log('Voice input started.');
+                } else {
+                    mediaRecorder.stop();
+                    voiceButton.classList.remove('bg-red-500', 'animate-pulse');
+                    voiceButton.classList.add('bg-[#8e8ee8]');
+                    userInput.disabled = true;
+                    userInput.placeholder = "Input is disabled. Press the microphone button to speak...";
+                    statusIndicator.textContent = "Processing...";
+                    statusIndicator.classList.remove('text-green-400');
+                    statusIndicator.classList.add('text-yellow-400');
+                    console.log('Voice input stopped.');
+                }
+            });
+        });
+    </script>
+</body>
+</html>
